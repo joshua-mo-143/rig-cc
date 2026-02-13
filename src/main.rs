@@ -14,17 +14,9 @@ use serde_json::json;
 use std::io::{self, Write};
 use tokio::time::{Duration, timeout};
 
-// ============================================================================
-// Error Types
-// ============================================================================
-
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 struct ToolError(String);
-
-// ============================================================================
-// ReadFile Tool
-// ============================================================================
 
 #[derive(Deserialize)]
 struct ReadFileArgs {
@@ -63,10 +55,6 @@ impl Tool for ReadFile {
     }
 }
 
-// ============================================================================
-// WriteFile Tool
-// ============================================================================
-
 #[derive(Deserialize)]
 struct WriteFileArgs {
     path: String,
@@ -104,7 +92,6 @@ impl Tool for WriteFile {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        // Create parent directories if they don't exist
         if let Some(parent) = std::path::Path::new(&args.path).parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)
@@ -123,10 +110,6 @@ impl Tool for WriteFile {
     }
 }
 
-// ============================================================================
-// Bash Tool
-// ============================================================================
-
 #[derive(Deserialize)]
 struct BashArgs {
     command: String,
@@ -135,7 +118,7 @@ struct BashArgs {
 #[derive(Deserialize, Serialize)]
 struct Bash;
 
-const MAX_OUTPUT_BYTES: usize = 50 * 1024; // 50KB
+const MAX_OUTPUT_BYTES: usize = 50 * 1024;
 const WARNING_TIMEOUT_SECS: u64 = 60;
 
 impl Tool for Bash {
@@ -172,12 +155,10 @@ impl Tool for Bash {
             .spawn()
             .map_err(|e| ToolError(format!("Failed to spawn command: {}", e)))?;
 
-        // Check if command completes within the warning timeout
         let warning_duration = Duration::from_secs(WARNING_TIMEOUT_SECS);
         let status = match timeout(warning_duration, child.wait()).await {
             Ok(result) => result.map_err(|e| ToolError(format!("Command failed: {}", e)))?,
             Err(_) => {
-                // Timeout elapsed - warn user but keep waiting
                 eprintln!(
                     "\n[Command running for >{}s. Press Ctrl+C to interrupt]",
                     WARNING_TIMEOUT_SECS
@@ -190,7 +171,6 @@ impl Tool for Bash {
             }
         };
 
-        // Get the stdout and stderr handles
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
@@ -211,7 +191,6 @@ impl Tool for Bash {
             stderr_content = String::from_utf8_lossy(&buf).to_string();
         }
 
-        // Build output
         let mut output = if status.success() {
             let mut out = stdout_content;
             if !stderr_content.is_empty() {
@@ -236,11 +215,9 @@ impl Tool for Bash {
             out
         };
 
-        // Truncate if needed
         let total_bytes = output.len();
         if total_bytes > MAX_OUTPUT_BYTES {
             output.truncate(MAX_OUTPUT_BYTES);
-            // Find a safe UTF-8 boundary
             while !output.is_char_boundary(output.len()) {
                 output.pop();
             }
@@ -253,10 +230,6 @@ impl Tool for Bash {
         Ok(output)
     }
 }
-
-// ============================================================================
-// Main Application
-// ============================================================================
 
 const SYSTEM_PROMPT: &str = r#"You are Claude Code, an interactive AI coding assistant running in the terminal.
 
@@ -274,10 +247,8 @@ Guidelines:
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Create Anthropic client from environment variable
     let client = Client::from_env();
 
-    // Build the agent with tools
     let agent = client
         .agent(anthropic::completion::CLAUDE_4_SONNET)
         .preamble(SYSTEM_PROMPT)
@@ -295,39 +266,33 @@ async fn main() -> Result<()> {
     let mut history: Vec<Message> = Vec::new();
 
     loop {
-        // Print prompt
         print!("> ");
         stdout.flush()?;
 
-        // Read user input
         let mut input = String::new();
         match stdin.read_line(&mut input) {
             Ok(0) => {
-                // EOF (Ctrl+D)
                 println!("\nGoodbye!");
                 break;
             }
             Ok(_) => {
                 let input = input.trim();
 
-                // Check for exit commands
                 if input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
                     println!("Goodbye!");
                     break;
                 }
 
-                // Skip empty input
                 if input.is_empty() {
                     continue;
                 }
 
-                // Stream the response
                 println!();
 
                 let mut stream = agent
                     .stream_prompt(input)
                     .with_history(history.clone())
-                    .multi_turn(5)
+                    .multi_turn(100)
                     .await;
 
                 let mut response_text = String::new();
@@ -346,14 +311,12 @@ async fn main() -> Result<()> {
                         Ok(MultiTurnStreamItem::StreamAssistantItem(
                             StreamedAssistantContent::ToolCall { tool_call, .. },
                         )) => {
-                            // Show tool being called
                             println!("\n[Calling tool: {}]", tool_call.function.name);
                             stdout.flush()?;
                         }
                         Ok(MultiTurnStreamItem::StreamUserItem(
                             rig::streaming::StreamedUserContent::ToolResult { tool_result, .. },
                         )) => {
-                            // Tool result received
                             println!("[Tool result received for: {}]", tool_result.id);
                             stdout.flush()?;
                         }
@@ -370,7 +333,6 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                // Print newline after response and show token usage
                 println!("\n");
                 println!(
                     "[Tokens: {} in / {} out]",
@@ -379,7 +341,6 @@ async fn main() -> Result<()> {
                 );
                 println!();
 
-                // Update history
                 history.push(Message::user(input));
                 if !response_text.is_empty() {
                     history.push(Message::assistant(response_text));
@@ -394,7 +355,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Format a number with comma separators
 fn format_number(n: u64) -> String {
     let s = n.to_string();
     let mut result = String::new();
